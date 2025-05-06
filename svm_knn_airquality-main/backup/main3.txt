@@ -1,0 +1,47 @@
+mod data;
+mod knn;
+mod svm;
+mod plot;
+mod utils;
+
+use data::load_data;
+use knn::predict_knn;
+use svm::train_svm;
+use plot::plot_svm_neighbors;
+use ndarray::{s, Axis};
+use ndarray::Array1;
+use std::fs;
+
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let (features, labels_usize) = load_data("csv/airquality.csv")?;
+
+    // Split 80% train / 20% test
+    let split_idx = (features.nrows() as f64 * 0.8) as usize;
+    let (train_x, test_x) = features.view().split_at(Axis(0), split_idx);
+    let (train_y_usize, _test_y_usize) = labels_usize.view().split_at(Axis(0), split_idx);
+    // 🟢 Konversi train_y dari usize -> f64 untuk SVM
+    let train_y_f64: Array1<f64> = train_y_usize.to_owned().mapv(|x| x as f64);
+
+    // SVM
+    let svm_preds = train_svm(train_x.to_owned(), train_y_f64, test_x.to_owned());
+    println!("SVM Prediksi Label Pertama: {}", svm_preds[0] as usize);
+
+    // KNN
+    let knn_pred = predict_knn(&train_x.to_owned(), &train_y_usize.to_owned(), &test_x.to_owned(), 3);
+    println!("KNN Prediksi Label Pertama: {}", knn_pred[0]);
+
+    // Buat folder output jika belum ada
+    fs::create_dir_all("output")?;
+
+    // Plot (menggunakan 2 fitur pertama)
+    plot_svm_neighbors(
+        &train_x.slice(s![.., 0..2]).to_owned(),
+        &train_y_usize.to_owned(), // tetap pakai versi usize
+        &test_x.slice(s![0..1, 0..2]).to_owned(),
+        svm_preds[0] as usize, // casting hasil prediksi SVM
+        "output/svm_plot.png"
+    )?;
+
+    Ok(())
+}

@@ -1,0 +1,404 @@
+use linfa::prelude::*;
+use linfa_logistic::MultiLogisticRegression;
+use ndarray::{Array1, Array2, Axis, s};
+use csv::ReaderBuilder;
+use std::fs::File;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
+use plotters::prelude::*;
+use std::io::{self, Write};
+
+// 1) Jarak Euclidean
+fn euclidean_distance(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
+// 2) Membuat plot
+fn plot_svm_neighbors(
+    train: &Array2<f64>,
+    train_labels: &Array1<usize>,
+    test: &Array2<f64>,
+    test_label: usize,
+    file_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let caption = format!("SVM Decision Boundary (Predicted: {})", 
+        match test_label {
+            0 => "BAIK",
+            1 => "SEDANG",
+            2 => "TIDAK SEHAT",
+            _ => "Unknown",
+        }
+    );
+
+    // We'll use the first two features for visualization
+    let x_min = train.column(0).iter().chain(test.column(0).iter()).fold(f64::INFINITY, |a, &b| a.min(b));
+    let x_max = train.column(0).iter().chain(test.column(0).iter()).fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    let y_min = train.column(1).iter().chain(test.column(1).iter()).fold(f64::INFINITY, |a, &b| a.min(b));
+    let y_max = train.column(1).iter().chain(test.column(1).iter()).fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    // Create the drawing area
+    let root = BitMapBackend::new(file_name, (1000, 800)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption(caption.as_str(), ("sans-serif", 30).into_font())
+        .margin(10)
+        .x_label_area_size(40)
+        .y_label_area_size(40)
+        .build_cartesian_2d(x_min..x_max, y_min..y_max)?;
+
+    chart
+        .configure_mesh()
+        .x_desc("PM10 (Normalized)")
+        .y_desc("SO2 (Normalized)")
+        .draw()?;
+
+    // Create a grid for decision boundary visualization
+    let grid_size = 100;
+    let x_step = (x_max - x_min) / grid_size as f64;
+    let y_step = (y_max - y_min) / grid_size as f64;
+
+    // Create a temporary SVM model just for the first two features
+    let two_feature_train = train.slice(s![.., 0..2]).to_owned();
+    let dataset = Dataset::new(two_feature_train, train_labels.clone())
+        .with_feature_names(vec!["pm10", "so2"]);
+    
+    let svm_model = MultiLogisticRegression::default()
+        .max_iterations(100)
+        .fit(&dataset)?;
+
+    // Draw decision regions
+    for i in 0..grid_size {
+        for j in 0..grid_size {
+            let x = x_min + i as f64 * x_step;
+            let y = y_min + j as f64 * y_step;
+            
+            let point = Array2::from_shape_vec((1, 2), vec![x, y])?;
+            let pred = svm_model.predict(&point)[0];
+            
+            let color = match pred {
+                0 => RGBColor(200, 255, 200), // Light green for BAIK
+                1 => RGBColor(255, 200, 200), // Light red for SEDANG
+                2 => RGBColor(200, 200, 255), // Light blue for TIDAK SEHAT
+                _ => WHITE,
+            };
+            
+            chart.draw_series(std::iter::once(Rectangle::new(
+                [(x, y), (x + x_step, y + y_step)],
+                ShapeStyle::from(&color).filled(),
+            )))?;
+        }
+    }
+
+    // Plot training points
+    for (i, label) in train_labels.iter().enumerate() {
+        let color = match label {
+            0 => GREEN.mix(0.7),    // BAIK
+            1 => RED.mix(0.7),      // SEDANG
+            2 => BLUE.mix(0.7),     // TIDAK SEHAT
+            _ => BLACK.into(),
+        };
+        
+        chart.draw_series(PointSeries::of_element(
+            vec![(train[[i, 0]], train[[i, 1]])],
+            8,
+            ShapeStyle::from(&color).filled(),
+            &|coord, size, style| {
+                EmptyElement::at(coord) 
+                    + Circle::new((0, 0), size, style)
+                    + Text::new(
+                        match label {
+                            0 => "B",
+                            1 => "S",
+                            2 => "T",
+                            _ => "?",
+                        },
+                        (0, 10),
+                        ("sans-serif", 15).into_font()
+                    )
+            },
+        ))?;
+    }
+
+    // Plot test point with larger marker
+    let test_color = match test_label {
+        0 => GREEN,
+        1 => RED,
+        2 => BLUE,
+        _ => BLACK,
+    };
+    
+    chart.draw_series(PointSeries::of_element(
+        vec![(test[[0, 0]], test[[0, 1]])],
+        15,
+        ShapeStyle::from(&test_color).filled(),
+        &|coord, size, style| {
+            EmptyElement::at(coord) 
+                + Circle::new((0, 0), size, style)
+                + Text::new(
+                    "X",
+                    (0, 15),
+                    ("sans-serif", 20).into_font()
+                )
+        },
+    ))?;
+
+    // Add legend
+    chart.draw_series(
+        vec![
+            ("BAIK", (x_max - (x_max-x_min)*0.3, y_max - (y_max-y_min)*0.1), GREEN),
+            ("SEDANG", (x_max - (x_max-x_min)*0.3, y_max - (y_max-y_min)*0.15), RED),
+            ("TIDAK SEHAT", (x_max - (x_max-x_min)*0.3, y_max - (y_max-y_min)*0.2), BLUE),
+            ("Test Point", (x_max - (x_max-x_min)*0.3, y_max - (y_max-y_min)*0.25), BLACK),
+        ]
+        .into_iter()
+        .map(|(label, pos, color)| {
+            Text::new(
+                label,
+                pos,
+                ("sans-serif", 15).into_font().color(&color),
+            )
+        }),
+    )?;
+
+    root.present()?;
+    println!("Plot disimpan sebagai {}", file_name);
+
+    Ok(())
+}
+
+// 3) KNN Predict Algoritma
+fn knn_predict(
+    train: &Array2<f64>,
+    train_labels: &Array1<usize>,
+    test: &Array2<f64>,
+    k: usize,
+) -> Array1<usize> {
+    let mut predictions = Array1::zeros(test.nrows());
+
+    for (i, test_sample) in test.axis_iter(Axis(0)).enumerate() {
+        let distances = train
+            .axis_iter(Axis(0))
+            .map(|train_sample| euclidean_distance(&train_sample.to_owned(), &test_sample.to_owned()))
+            .collect::<Vec<_>>();
+
+        let mut nearest_indices = (0..distances.len()).collect::<Vec<_>>();
+        nearest_indices.sort_by(|&a, &b| distances[a].partial_cmp(&distances[b]).unwrap());
+        let nearest_indices = &nearest_indices[..k];
+
+        let mut label_counts = std::collections::HashMap::new();
+        for &idx in nearest_indices {
+            let label = train_labels[idx];
+            *label_counts.entry(label).or_insert(0) += 1;
+        }
+
+        let prediction = label_counts
+            .into_iter()
+            .max_by_key(|&(_, count)| count)
+            .map(|(label, _)| label)
+            .unwrap_or(0);
+
+        predictions[i] = prediction;
+    }
+
+    predictions
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 4) Baca dataset
+    let file = File::open("csv/airquality.csv")?;
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_reader(file);
+
+    let mut records: Vec<_> = rdr.records().collect::<Result<_, _>>()?;
+    let mut rng = rand::thread_rng();
+    records.shuffle(&mut rng);
+
+    // 5) Fitur dan Label
+    let mut features = Vec::new();
+    let mut labels = Vec::new();
+
+    for record in &records {
+        let feat: Vec<f64> = (0..5) // Ambil 5 fitur pertama (pm10, so2, co, o3, no2)
+            .map(|i| record[i].trim().parse::<f64>().unwrap_or(0.0))
+            .collect();
+        features.push(feat);
+
+        let label = match record[5].trim() { // Kolom ke-6 (indeks 5) adalah kategori
+            "BAIK" => 0,
+            "SEDANG" => 1,
+            "TIDAK SEHAT" => 2,
+            _ => 0,
+        };
+        labels.push(label);
+    }
+
+    // 6) Konversi ke Array2 dan Array1
+    let mut features = Array2::from_shape_vec((features.len(), 5), features.concat())?;
+    let labels = Array1::from_vec(labels);
+
+    // Normalisasi Data
+    for mut col in features.axis_iter_mut(ndarray::Axis(1)) {
+        let mean = col.mean().unwrap();
+        let std = col.std(0.0);
+        col.iter_mut().for_each(|x| *x = (*x - mean) / std);
+    }
+
+    // 7) Dataset 80 - 20
+    let (train, test) = linfa::dataset::Dataset::new(features, labels)
+        .split_with_ratio(0.8);
+
+    // 8) Training model SVM (Logistic Regression)
+    let svm_model = MultiLogisticRegression::default()
+        .max_iterations(100)
+        .fit(&train)?;
+
+    // 9) Prediksi dan Evaluasi model SVM
+    let svm_pred = svm_model.predict(&test);
+    let svm_accuracy = svm_pred.iter()
+        .zip(test.targets().iter())
+        .filter(|(p, t)| p == t)
+        .count() as f32 / test.nsamples() as f32;
+
+    println!("Akurasi Model SVM: {:.2}%", svm_accuracy * 100.0);
+
+    // 10) Plot hasil prediksi SVM
+    let test_sample = test.records().slice(s![0..1, ..]).to_owned();
+    let test_label = svm_pred[0];
+    plot_svm_neighbors(
+        train.records(),
+        train.targets(),
+        &test_sample,
+        test_label,
+        "svm_neighbors.png",
+    ).expect("Gagal membuat plot");
+
+    // 11) Evaluasi model KNN (Manual)
+    let knn_pred = knn_predict(train.records(), train.targets(), test.records(), 5);
+    let knn_accuracy = knn_pred.iter()
+        .zip(test.targets().iter())
+        .filter(|(p, t)| p == t)
+        .count() as f32 / test.nsamples() as f32;
+
+    println!("Akurasi Model KNN: {:.2}%", knn_accuracy * 100.0);
+
+    // 12) Ambil 10 sampel secara acak dari data test
+    let mut rng = thread_rng();
+    let mut indices: Vec<usize> = (0..test.nsamples()).collect();
+    indices.shuffle(&mut rng);
+    let selected_indices = &indices[0..10.min(indices.len())];
+
+    let test_samples = test.records().select(ndarray::Axis(0), selected_indices);
+    let test_labels = test.targets().select(ndarray::Axis(0), selected_indices);
+
+    // 13) Prediksi 10 sampel dengan SVM dan KNN
+    let svm_predictions = svm_model.predict(&test_samples);
+    let knn_predictions = knn_predict(train.records(), train.targets(), &test_samples, 5);
+
+    // 14) Hasil prediksi 10 Sampel
+    println!("\nHasil Prediksi untuk 10 Sampel dari Data Test:");
+    for (i, ((svm_pred, knn_pred), actual)) in svm_predictions.iter()
+        .zip(knn_predictions.iter())
+        .zip(test_labels.iter())
+        .enumerate()
+    {
+        let svm_category = match svm_pred {
+            0 => "BAIK",
+            1 => "SEDANG",
+            2 => "TIDAK SEHAT",
+            _ => "Unknown",
+        };
+        let knn_category = match knn_pred {
+            0 => "BAIK",
+            1 => "SEDANG",
+            2 => "TIDAK SEHAT",
+            _ => "Unknown",
+        };
+        let actual_category = match actual {
+            0 => "BAIK",
+            1 => "SEDANG",
+            2 => "TIDAK SEHAT",
+            _ => "Unknown",
+        };
+        println!(
+            "Sampel {}: Prediksi SVM = {}, Prediksi KNN = {}, Aktual = {}",
+            i + 1, svm_category, knn_category, actual_category
+        );
+    }
+
+    // 15) Input manual dari pengguna
+    println!("\nMasukkan parameter untuk prediksi manual:");
+    let mut input = String::new();
+
+    let mut manual_features = Vec::new();
+    
+    print!("pm10: ");
+    io::stdout().flush()?;
+    io::stdin().read_line(&mut input)?;
+    manual_features.push(input.trim().parse::<f64>()?);
+    input.clear();
+
+    print!("so2: ");
+    io::stdout().flush()?;
+    io::stdin().read_line(&mut input)?;
+    manual_features.push(input.trim().parse::<f64>()?);
+    input.clear();
+
+    print!("co: ");
+    io::stdout().flush()?;
+    io::stdin().read_line(&mut input)?;
+    manual_features.push(input.trim().parse::<f64>()?);
+    input.clear();
+
+    print!("o3: ");
+    io::stdout().flush()?;
+    io::stdin().read_line(&mut input)?;
+    manual_features.push(input.trim().parse::<f64>()?);
+    input.clear();
+
+    print!("no2: ");
+    io::stdout().flush()?;
+    io::stdin().read_line(&mut input)?;
+    manual_features.push(input.trim().parse::<f64>()?);
+
+    // Normalisasi Input Manual (gunakan mean dan std dari data training)
+    let mut manual_array = Array2::from_shape_vec((1, 5), manual_features)?;
+    for (i, mut col) in manual_array.axis_iter_mut(ndarray::Axis(1)).enumerate() {
+        let train_col = train.records().column(i);
+        let mean = train_col.mean().unwrap();
+        let std = train_col.std(0.0);
+        col.iter_mut().for_each(|x| *x = (*x - mean) / std);
+    }
+
+    // 16) Prediksi dengan SVM
+    let svm_manual_prediction = svm_model.predict(&manual_array);
+    let svm_predicted_category = match svm_manual_prediction[0] {
+        0 => "BAIK",
+        1 => "SEDANG",
+        2 => "TIDAK SEHAT",
+        _ => "Unknown",
+    };
+
+    // 17) Prediksi dengan KNN (Manual)
+    let knn_manual_prediction = knn_predict(
+        train.records(),
+        train.targets(),
+        &manual_array,
+        5,
+    );
+    let knn_predicted_category = match knn_manual_prediction[0] {
+        0 => "BAIK",
+        1 => "SEDANG",
+        2 => "TIDAK SEHAT",
+        _ => "Unknown",
+    };
+
+    println!("\nHasil Prediksi Input Manual:");
+    println!("Prediksi SVM: {}", svm_predicted_category);
+    println!("Prediksi KNN: {}", knn_predicted_category);
+
+    Ok(())
+}
