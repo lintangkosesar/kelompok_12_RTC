@@ -1,0 +1,12 @@
+[package]
+name = "trigonometri"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "trigonometry"
+crate-type = ["cdylib"]  # This is important for creating a .so file
+
+[dependencies]
+lazy_static = "1.4.0"
+libc = "0.2"

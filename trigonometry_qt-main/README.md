@@ -1,0 +1,1 @@
+trigonometri_qt

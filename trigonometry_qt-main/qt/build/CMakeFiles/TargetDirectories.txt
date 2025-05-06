@@ -1,0 +1,4 @@
+/home/lintang/Coding/trigonometri/qt/build/CMakeFiles/TrigonometryQT.dir
+/home/lintang/Coding/trigonometri/qt/build/CMakeFiles/edit_cache.dir
+/home/lintang/Coding/trigonometri/qt/build/CMakeFiles/rebuild_cache.dir
+/home/lintang/Coding/trigonometri/qt/build/CMakeFiles/TrigonometryQT_autogen.dir
