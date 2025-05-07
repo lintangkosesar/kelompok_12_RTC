@@ -1,3 +1,10 @@
+Team Member:
+1. Lintang Herinda Kosesar (2042221017)
+2. Zahrotul Firdaus (2042221056)
+3. Charismatulloh Yusuf Alansyah (2042221077)
+
+Supervisor : Ahmad Radhy, S.Si., M.Si.
+
 🌿 Air Quality Prediction using Artificial Neural Network (ANN)
 ![alt text](https://github.com/lintangkosesar/neural_network_qt/blob/main/rustqtnn.jpg?raw=true)
 In this project, I built an ANN model to predict air quality categories ("Good", "Moderate", "Unhealthy") based on five input parameters: PM10, SO₂, CO, O₃, and NO₂ This proejct built by rust programming and QT builder GUI.
